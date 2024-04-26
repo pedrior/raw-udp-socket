@@ -31,8 +31,9 @@ def unpack(bytes: bytes) -> dict:
     # Lê os 4 bits seguintes para obter o tipo do recurso solicitado
     resource = (bytes[0] & 0x0F)
 
-    # O servidor retorna um recurso inválido quando não consegue processar a requisição do cliente.
-    if (type != MSG_RESPONSE and resource == RES_INVALID):
+    # Se por algum motivo o tipo da mensagem não for uma resposta ou o recurso solicitado
+    # for inválido, retorna None
+    if (type != MSG_RESPONSE or resource == RES_INVALID):
         return None
 
     # Lê os 16 bits seguintes para obter o id da requisição
