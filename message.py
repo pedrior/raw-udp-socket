@@ -1,55 +1,38 @@
 import random
 from resources import *
 
-MSG_REQUEST = 0b0000
-MSG_RESPONSE = 0b0001
-
-
 def pack(resource: ResourceType) -> bytes:
     identifier = random.randint(1, 65535)
 
-    # A mensagem de requisição é composta por 32 bits, sendo os 4 bits mais significativos o tipo da mensagem, os
-    # 4 bits seguintes o tipo do recurso solicitado, os 16 bits seguintes o id da requisição e os 8 bits seguintes
-    # reservados para o tamanho da resposta (gerado pelo servidor). Na resposta, os bits após o tamanho da resposta
-    # são reservados para o conteúdo da resposta.
+    # A mensagem de requisição é composta por 3 bytes, sendo o primeiro byte contendo o tipo da mensagem e o recurso
+    # solicitado, o segundo e terceiro bytes contendo o identificador da requisição.
+    message = bytearray()
 
-    # Escreve os 4 bits mais significativos com o tipo da mensagem
-    message = MSG_REQUEST << 28
-    # Escreve os 4 bits seguintes com o tipo do recurso solicitado
-    message |= resource.value << 24
-    # Escreve os 16 bits seguintes com o id da requisição
-    message |= identifier << 8
+    message.append(resource.value)
 
-    return message.to_bytes(4, byteorder='big')
+    # Escreve o identificador nos 2 bytes seguintes, sendo o primeiro byte os 8 bits mais significativos e o segundo
+    # byte os 8 bits menos significativos do identificador
+    message.append((identifier & 0xFF00) >> 8)
+    message.append(identifier & 0xFF)
+
+    return bytes(message)
 
 
 def unpack(bytes: bytes) -> dict:
+    resource = (bytes[0] & 0x0F)            # 4 bits menos significativos do byte 1: Tipo do recurso
+    identifier = (bytes[1] << 8) | bytes[2] # Byte 1 e 2: Identificador da requisição
+    size = bytes[3]                         # Byte 3: Tamanho da resposta
+    data = bytes[4:]                        # Byte 4 em diante: Dados da resposta
 
-    # Lê os 4 bits mais significativos para obter o tipo da mensagem
-    type = (bytes[0] & 0xF0) >> 4
-
-    # Lê os 4 bits seguintes para obter o tipo do recurso solicitado
-    resource = (bytes[0] & 0x0F)
-
-    # Se por algum motivo o tipo da mensagem não for uma resposta ou o recurso solicitado
-    # for inválido, retorna None
-    if (type != MSG_RESPONSE or resource == RES_INVALID):
+    # Verifica se o servidor está informando um erro
+    if (resource == RES_INVALID or size == 0):
         return None
-
-    # Lê os 16 bits seguintes para obter o id da requisição
-    identifier = (bytes[1] << 8) | bytes[2]
-
-    # Lê os 8 bits seguintes para obter o tamanho da resposta
-    response_size = bytes[3]
-
-    # Lê os bits restantes para obter o conteúdo da resposta
-    data = bytes[4:4+response_size]
 
     # Converte o conteúdo da resposta para o tipo de dado correto
     if (resource == ResourceType.ServerStats.value):
         data = int.from_bytes(data, byteorder='big')
     else:
-        data = data.decode('ISO-8859-1', 'ignore')
+        data = data.decode('UTF-8', 'ignore')
 
     return {
         'resource': ResourceType(resource),
