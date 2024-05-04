@@ -26,7 +26,7 @@ def main():
     send_sock = socket.socket(
         socket.AF_INET,
         socket.SOCK_RAW,
-        socket.IPPROTO_UDP if 'win32' in sys.platform else socket.IPPROTO_RAW)
+        socket.IPPROTO_RAW if 'linux' in sys.platform else socket.IPPROTO_UDP)
 
     # O recebimento via IPPROTO_RAW não é possível usando socket raw (man 7 raw, Linux manual page), então é necessário
     # criar um novo socket IPPROTO_UDP para receber a resposta do servidor. NOTA: IPPROTO_UDP pode está sendo utilizado
