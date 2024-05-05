@@ -3,12 +3,13 @@ Projeto de Redes de Computadores: Parte 2 - Cliente UDP RAW 💪
 Autores: Davi Luiz, Pedro João e Renan Pascoal
 """
 
+import logging
 import sys
 import socket
 import struct
 import threading
 import constants as constants    # SERVER_IP, SERVER_PORT, SOCKET_BUFFER_SIZE
-import message as message        # pack, unpack
+import message as message        # make_payload, unpack_payload_dgram
 from message import Request
 from request import *            # humanize_request
 from checksum import *           # checksum
@@ -17,31 +18,40 @@ from terminal_utils import *     # clear_screen
 
 
 def main():
-    src_ip, src_port = get_source_address() # Obtém o endereço IP e porta de origem
+    is_linux = False
+
+    # Obtém o endereço IP da interface de rede e uma porta aleatória
+    src_ip, src_port = get_source_address()
     dst_ip, dst_port = (constants.SERVER_IP, constants.SERVER_PORT)
 
-    # Cria um socket RAW para enviar a requisição ao servidor. O uso de socket RAW não é mais suportado no Windows,
-    # então é necessário utilizar IPPROTO_UDP para enviar pacotes.O protocolo IPPROTO_RAW implica IP_HDRINCL habilitado,
-    # o que significa que o cabeçalho IP deve ser construído manualmente (man 7 raw, Linux manual page).
-    send_sock = socket.socket(
-        socket.AF_INET,
-        socket.SOCK_RAW,
-        socket.IPPROTO_RAW if 'linux' in sys.platform else socket.IPPROTO_UDP)
+    # Cria um Socket RAW para enviar requisições ao servidor. No Linux, usamos o protocolo IPPROTO_RAW para enviar
+    # datagramas IP, neste cenário, o cabeçalho IP é construído manualmente. Nos demais SO, o protocolo IPPROTO_RAW 
+    # não é suportado, então usamos o protocolo IPPROTO_UDP para enviar segmentos, o que significa que o cabeçalho IP 
+    # é construído pelo sistema operacional. Além disso, o recebimento via protocolo RAW não é possível no linux
+    # (man raw 7), fazendo necessário criar um novo Socket RAW de protocolo UDP para receber as respostas do servidor.
+    try:
+        send_sock = socket.socket(
+            socket.AF_INET,
+            socket.SOCK_RAW,
+            socket.IPPROTO_RAW if is_linux else socket.IPPROTO_UDP)
+    except Exception as e:
+        logging.error(f'Falha ao criar o socket de envio: {e}')
+        exit(1)
 
-    # O recebimento via IPPROTO_RAW não é possível usando socket raw (man 7 raw, Linux manual page), então é necessário
-    # criar um novo socket IPPROTO_UDP para receber a resposta do servidor. NOTA: IPPROTO_UDP pode está sendo utilizado
-    # se esse código estiver sendo executado em um sistema operacional Windows, fazendo o uso desse socket para recebi-
-    # mento desnecessário, mas vamos manter por simplicidade.
-    recv_sock = socket.socket(socket.AF_INET, socket.SOCK_RAW, socket.IPPROTO_UDP)
-    
-    # Conecta o socket de recebimento ao servidor de destino
-    recv_sock.connect((dst_ip, dst_port))
+    # Cria um novo socket raw de protocolo IPPROTO_UDP e inicia uma thread para processar as respostas do servidor.
+    # A criação de um novo Socket para recebimento é necessário apenas quando usamos protocolo IPPROTO_RAW, no entanto,
+    # para facilitar a implementação, criamos um novo Socket para receber as respostas do servidor independente do SO.
+    try:
+        recv_sock = socket.socket(socket.AF_INET, socket.SOCK_RAW, socket.IPPROTO_UDP)
+        recv_sock.connect((dst_ip, dst_port))
+    except Exception as e:
+        logging.error(f'Falha ao criar o socket de recebimento e conectar ao servidor: {e}')
+        exit(1)
 
-    # Inicia uma thread para escutar as respostas do servidor
-    threading.Thread(target=listen_socket, args=(recv_sock,), daemon=True).start()
+    threading.Thread(target=process_responses, args=(recv_sock,), daemon=True).start()
 
     while True:
-        print(f'Bem-vindo ao cliente UDP RAW 💪! - Enviando de: {src_ip}:{src_port}\n')
+        print(f'Bem-vindo ao cliente UDP RAW 💪! - Enviando de: {src_ip}:{src_port} no {sys.platform}\n')
         option = int(input('Que tipo requisição deseja solicitar ao servidor?\n\n'
                         '1 - Data e hora\n'
                         '2 - Frase de motivação\n'
@@ -49,9 +59,7 @@ def main():
                         '4 - Sair\n\n'))
 
         if option < 1 or option > 4:
-            print('Opção inválida. Tente novamente.\n')
             clear_screen()
-
             continue
 
         if (option == 4):
@@ -60,40 +68,51 @@ def main():
         print()
 
         # Empacota a mensagem de requisição
-        payload, identifier = message.pack_payload(Request(option - 1))
+        payload, identifier = message.make_payload(Request(option - 1))
 
         # Prepara o segmento UDP (UDP Header + Payload)
         segment = build_segment(src_ip, dst_ip, src_port, dst_port, payload)
 
         print(f'Enviando requisição Nº {identifier}...')
-        if ('win32' in sys.platform):
-            # O cabeçalho está sendo construído pelo Windows
-            send_sock.sendto(segment, (dst_ip, dst_port))
-        else:
-            # Prepara o datagrama IP (IP Header + Segment)
-            datagram = build_datagram(src_ip, dst_ip, segment)
-            send_sock.sendto(datagram, (dst_ip, dst_port))
+
+        # Envia o datagrama IP (Linux com IPPROTO_RAW) ou o segmento UDP (demais SO com IPPROTO_UDP)
+        try:
+            if is_linux:
+                # Prepara o datagrama IP (IP Header + Segment)
+                datagram = build_datagram(src_ip, dst_ip, segment)
+                send_sock.sendto(datagram, (dst_ip, dst_port))
+            else:
+                send_sock.sendto(segment, (dst_ip, dst_port))
+        except Exception as e:
+            logging.error(f'Falha ao enviar a requisição: {e}')
+            break
 
         input()
         clear_screen()
      
     send_sock.close()
     recv_sock.close()
+        
     exit(0)
 
-def listen_socket(recv_sock: socket.socket):
+def process_responses(recv_sock: socket.socket):
     while True:
         if not recv_sock: # A thread foi interrompida
             break
 
-        datagram, _ = recv_sock.recvfrom(constants.SOCKET_BUFFER_SIZE)
-        # Desempacota o datagrama recebido e extrai o conteúdo do payload 
-        unpacket_payload = message.unpack_datagram(datagram)
+        # Recebe a resposta do servidor e desempacota o payload
+        try:
+            datagram = recv_sock.recvfrom(constants.SOCKET_BUFFER_SIZE)[0]
+        except Exception as e:
+            logging.error(f'Falha ao receber a resposta: {e}')
+            print('\n\nPressione ENTER para continuar...\n')
+            break
 
-        if (unpacket_payload == None):
+        payload = message.unpack_payload_dgram(datagram)
+        if (payload == None):
             print('Ocorreu um erro ao processar a sua requisição. Tente novamente!')
         else:
-            (request, identifier, data) = unpacket_payload
+            (request, identifier, data) = payload
             print(f'\nRecurso "{humanize_resquest(request)}" solicitado Nº {identifier}: {data}')
 
         print('\n\nPressione ENTER para continuar...\n')

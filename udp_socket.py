@@ -3,10 +3,11 @@ Projeto de Redes de Computadores: Parte 1 - Cliente UDP
 Autores: Davi Luiz, Pedro João e Renan Pascoal
 """
 
+import logging
 import socket
 import threading
 import constants as constants   # SERVER_IP, SERVER_PORT, SOCKET_BUFFER_SIZE
-import message as message       # pack, unpack
+import message as message       # make_payload, unpack_payload
 from message import Request
 from request import *           # humanize_request
 from network_utils import *     # get_source_address
@@ -14,12 +15,19 @@ from terminal_utils import *    # clear_screen
 
 
 def main():
-    src_ip, src_port = get_source_address()  # Obtém o endereço IP e porta de origem
+    # Obtém o endereço IP da interface de rede e uma porta aleatória
+    src_ip, src_port = get_source_address()
+    dst_ip, dst_port = (constants.SERVER_IP, constants.SERVER_PORT)
 
-    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    sock.bind((src_ip, src_port))
+    try:
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        sock.connect((dst_ip, dst_port))
+    except Exception as e:
+        logging.error(f'Falha ao criar o socket: {e}')
+        exit(1)
 
-    threading.Thread(target=listen_socket, args=(sock,), daemon=True).start()
+    # Inicia uma thread para processar as respostas do servidor
+    threading.Thread(target=process_responses, args=(sock,), daemon=True).start()
 
     while True:
         print(f'Bem-vindo ao cliente UDP! - Enviando de: {src_ip}:{src_port}\n')
@@ -30,7 +38,6 @@ def main():
                         '4 - Sair\n\n'))
 
         if option < 1 or option > 4:
-            print('Opção inválida. Tente novamente.\n')
             clear_screen()
             continue
 
@@ -39,11 +46,16 @@ def main():
 
         print()
 
-        # Empacota a mensagem de requisição e a envia
-        payload, identifier = message.pack_payload(Request(option - 1))
+        # Cria uma mensagem de requisição e a envia
+        payload, identifier = message.make_payload(Request(option - 1))
 
         print(f'Enviando requisição Nº {identifier}...')
-        sock.sendto(payload, (constants.SERVER_IP, constants.SERVER_PORT))
+
+        try:
+            sock.sendto(payload, (dst_ip, dst_port))
+        except Exception as e:
+            logging.error(f'Falha ao enviar a requisição: {e}')
+            break
 
         input()
         clear_screen()
@@ -51,19 +63,24 @@ def main():
     sock.close()
     exit(0)
 
-def listen_socket(sock: socket.socket):
+def process_responses(recv_sock: socket.socket):
     while True:
-        if not sock: # A thread foi interrompida
+        if not recv_sock: # A thread foi interrompida
             break
 
-        # Recebe a resposta do servidor e a desempacota.
-        rcv_payload, _ = sock.recvfrom(constants.SOCKET_BUFFER_SIZE)
-        unpacket_payload = message.unpack_payload(rcv_payload)
-
-        if (unpacket_payload == None):
+        # Recebe a resposta do servidor e desempacota o payload
+        try:
+            payload = recv_sock.recvfrom(constants.SOCKET_BUFFER_SIZE)[0]
+        except Exception as e:
+            logging.error(f'Falha ao receber a resposta: {e}')
+            print('\n\nPressione ENTER para continuar...\n')
+            break
+        
+        payload = message.unpack_payload(payload)
+        if (payload == None):
             print('Ocorreu um erro ao processar a sua requisição. Tente novamente!')
         else:
-            (request, identifier, data) = unpacket_payload
+            (request, identifier, data) = payload
             print(f'\nRecurso "{humanize_resquest(request)}" solicitado Nº {identifier}: {data}')
 
         print('\n\nPressione ENTER para continuar...\n')
