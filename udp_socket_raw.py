@@ -18,7 +18,7 @@ from terminal_utils import *     # clear_screen
 
 
 def main():
-    is_linux = False
+    is_linux = sys.platform == 'linux'
 
     # Obtém o endereço IP da interface de rede e uma porta aleatória
     src_ip, src_port = get_source_address()
@@ -144,15 +144,16 @@ def build_segment(src_ip: str, dst_ip: str, src_port: int, dst_port: int, payloa
     return udp_header + payload
 
 def build_datagram(src_ip: str, dst_ip: str, segment: bytes) -> bytes:
+    # Alguns campos são preenchidos automaticamente pelo kernel (man raw 7).
     ip_ihl = 5                           # Internet Header Length
     ip_ver = 4                           # IPv4
     ip_tos = 0                           # Type of Service
-    ip_tot_len = 20                      # Total Length (O kernel irá recalcular)
-    ip_id = 54321                        # Identification
+    ip_tot_len = 0                       # Total Length (O kernel irá recaucular)
+    ip_id = 0                            # Identification (O kernel irá preencher)
     ip_frag_off = 0                      # Fragment Offset
     ip_ttl = 255                         # Time to Live
     ip_proto = socket.IPPROTO_UDP        # Protocolo UDP
-    ip_check = 0                         # Checksum (O kernel irá recalcular)
+    ip_check = 0                         # Checksum (O kernel irá recaucular)
     ip_src_ip = socket.inet_aton(src_ip) # Source IP
     ip_dst_ip = socket.inet_aton(dst_ip) # Destination IP
 
